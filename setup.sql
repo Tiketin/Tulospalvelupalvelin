@@ -49,3 +49,16 @@ CREATE TABLE pelit (
     FOREIGN KEY (ryhmaid) REFERENCES ryhmat(ryhmaid),
     FOREIGN KEY (voittajaid) REFERENCES pelaajat(pelaajaid)
 );
+
+-- Trigger: Automatically create a stats row when a new player is inserted
+DELIMITER //
+
+CREATE TRIGGER trg_after_insert_pelaaja
+AFTER INSERT ON pelaajat
+FOR EACH ROW
+BEGIN
+    INSERT INTO statistiikat (pelaajaid) VALUES (NEW.pelaajaid);
+END;
+//
+
+DELIMITER ;
