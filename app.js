@@ -4,6 +4,8 @@
 import {createRequire} from 'module';
 
 const require = createRequire(import.meta.url);
+const dotenv = require('dotenv');
+dotenv.config();
 const bodyParser = require('body-parser');
 const express = require('express');
 const request = require('request');
@@ -16,10 +18,10 @@ let hashedPw;
 
 let mysql = require('mysql');
 let con = mysql.createConnection({
-  host: 'eu-cdbr-west-03.cleardb.net',
-  user: 'bc2d76b34dd02e',
-  password: '012b2e53',
-  database: 'heroku_b0cb4b903fd386b',
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME
 });
 
 /**
@@ -27,10 +29,10 @@ let con = mysql.createConnection({
  */
 function handleDisconnect() {
   con = mysql.createConnection({
-    host: 'eu-cdbr-west-03.cleardb.net',
-    user: 'bc2d76b34dd02e',
-    password: '012b2e53',
-    database: 'heroku_b0cb4b903fd386b',
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME
   });
 
   con.connect(function(err) {
