@@ -46,8 +46,8 @@ app.use(function(req, res, next) {
 
 
 app.get('/api/players', async (req, res) => {
-  console.log('Get players from a certain group')
   const group = req.query.group
+  console.log('Get players from group ' + group)
   
   if (!textInputCheck(group)) return res.status(400).send('Syöte ei hyväksytty!')
     
@@ -79,8 +79,8 @@ app.get('/api/players', async (req, res) => {
 
 // parametrien kirjoitustapa selaimessa : http://localhost:3000/api/login?group=Sikailijat&password=asd
 app.get('/api/login', async (req, res) => {
-  console.log('Checks your group')
   const { group, password } = req.query
+  console.log('Login for group ' + group)
 
   if (!textInputCheck(group) || !textInputCheck(password)) {
     return res.status(400).send('Syöte ei hyväksytty!')
@@ -107,8 +107,8 @@ app.get('/api/login', async (req, res) => {
 
 // parametrien kirjoitustapa selaimessa : http://localhost:3000/api/player?group=Sikailijat&player=Onni
 app.get('/api/player', async (req, res) => {
-  console.log('Get stats of one player')
   const { group, player } = req.query
+  console.log('Get stats of player ' + player + ' in group ' + group)
 
   if (!textInputCheck(group) || !textInputCheck(player)) {
     return res.status(400).send('Syöte ei hyväksytty!')
@@ -140,8 +140,8 @@ app.get('/api/player', async (req, res) => {
 
 // parametrien kirjoitustapa selaimessa : http://localhost:3000/api/games?group=asd
 app.get('/api/games', async (req, res) => {
-  console.log('Get list of played games')
   const group = req.query.group
+  console.log('Get list of played games for group ' + group)
 
   if (!textInputCheck(group)) return res.status(400).send('Syöte ei hyväksytty!')
 
@@ -166,8 +166,8 @@ app.get('/api/games', async (req, res) => {
 
 // parametrien kirjoitustapa selaimessa : http://localhost:3000/api/newgroup
 app.post('/api/newgroup', async (req, res) => {
-  console.log('Got a POST request for the homepage')
   const { nimi, salasana } = req.body || {}
+  console.log('Create a new group ' + nimi)
 
   if (!textInputCheck(nimi) || !textInputCheck(salasana)) {
     return res.status(400).send('Syöte ei hyväksytty!')
@@ -192,8 +192,8 @@ app.post('/api/newgroup', async (req, res) => {
 
 // parametrien kirjoitustapa selaimessa : http://localhost:3000/api/newplayer
 app.post('/api/newplayer', async (req, res) => {
-  console.log('Create a new player')
   const { pelaajan_nimi, ryhman_nimi } = req.body || {}
+  console.log('Create a new player ' + pelaajan_nimi + ' for group ' + ryhman_nimi)
 
   if (!textInputCheck(pelaajan_nimi) || !textInputCheck(ryhman_nimi)) {
     return res.status(400).send('Syöte ei hyväksytty!')
@@ -233,6 +233,7 @@ app.post('/api/newplayer', async (req, res) => {
 app.post('/api/newgame', async (req, res) => {
   try {
     const body = req.body
+    console.log('Save a new game for group ' + body.ryhman_nimi)
 
     if (!textInputCheck(body.ryhman_nimi)) {
       return res.status(400).send('Syöte ei hyväksytty!')
