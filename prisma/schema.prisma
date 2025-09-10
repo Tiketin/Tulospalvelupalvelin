@@ -1,0 +1,60 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model pelaajat {
+  pelaajaid    Int           @id @default(autoincrement())
+  nimi         String        @db.VarChar(255)
+  ryhmaid      Int
+  ryhmat       ryhmat        @relation(fields: [ryhmaid], references: [ryhmaid], onUpdate: Restrict, map: "pelaajat_ibfk_1")
+  pelit        pelit[]
+  statistiikat statistiikat?
+
+  @@index([ryhmaid], map: "ryhmaid")
+}
+
+model pelit {
+  peliid     Int      @id @default(autoincrement())
+  ryhmaid    Int
+  voittajaid Int
+  pvm        DateTime @db.Date
+  ryhmat     ryhmat   @relation(fields: [ryhmaid], references: [ryhmaid], onUpdate: Restrict, map: "pelit_ibfk_1")
+  pelaajat   pelaajat @relation(fields: [voittajaid], references: [pelaajaid], onUpdate: Restrict, map: "pelit_ibfk_2")
+
+  @@index([ryhmaid], map: "ryhmaid")
+  @@index([voittajaid], map: "voittajaid")
+}
+
+model ryhmat {
+  ryhmaid    Int        @id @default(autoincrement())
+  nimi       String     @unique(map: "nimi") @db.VarChar(255)
+  salasana   String     @db.VarChar(255)
+  pelaajat   pelaajat[]
+  pelit      pelit[]
+}
+
+model statistiikat {
+  statistiikkaid Int       @id @default(autoincrement())
+  pelaajaid      Int?      @unique(map: "pelaajaid")
+  pelatutlkm     Int?      @default(0)
+  voitotlkm      Int?      @default(0)
+  p0             Int?      @default(0)
+  p1             Int?      @default(0)
+  p2             Int?      @default(0)
+  p3             Int?      @default(0)
+  p4             Int?      @default(0)
+  p5             Int?      @default(0)
+  p6             Int?      @default(0)
+  p7             Int?      @default(0)
+  p8             Int?      @default(0)
+  p9             Int?      @default(0)
+  p10            Int?      @default(0)
+  p11            Int?      @default(0)
+  p12            Int?      @default(0)
+  pelaajat       pelaajat? @relation(fields: [pelaajaid], references: [pelaajaid], onDelete: Restrict, onUpdate: Restrict, map: "statistiikat_ibfk_1")
+}

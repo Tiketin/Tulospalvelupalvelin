@@ -9,14 +9,16 @@ React-client: https://github.com/Tiketin/Tulospalveluclient-react
 
 Kehitysympäristöä varten Node.js ja mysql
 
-Tietokannan pystytys MariaDb clientilla:
-mysql -u root -p < polku_projektiin\TulosPalveluPalvelin\setup.sql
 
 Luo projektin juureen .env niminen tiedosto ja laita oikeat tiedot:
-DB_HOST=localhost
-DB_USER=oma_db_kayttaja
-DB_PASSWORD=oma_salasana
-DB_NAME=tulospalvelu
+```conf
+DATABASE_URL="mysql://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:3306/<DB_NAME>"
+```
+
+Tietokannan pystytys:
+```bash
+npx prisma db push
+```
 
 Palvelimen riippuvuudet:
 npm install
