@@ -2,67 +2,24 @@
  * Tulospalvelupalvelin
  */
 import {createRequire} from 'module';
+import { PrismaClient } from '@prisma/client'
 
 const require = createRequire(import.meta.url);
 const dotenv = require('dotenv');
 dotenv.config();
 const bodyParser = require('body-parser');
 const express = require('express');
-const request = require('request');
 let app = express();
-let url = require('url');
-let util = require('util');
 let bcrypt = require('bcrypt');
 const saltRounds = 10;
-let hashedPw;
 
-let mysql = require('mysql');
-let con = mysql.createConnection({
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME
-});
-
-/**
- * Mitä tehdään jos menetetään yhteys tietokantaan
- */
-function handleDisconnect() {
-  con = mysql.createConnection({
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME
-  });
-
-  con.connect(function(err) {
-    if (err) {
-      console.log('Tietokantaan ei saatu yhteyttä: ', err);
-      setTimeout(handleDisconnect, 2000);
-    }
-  });
-
-  con.on('error', function(err) {
-    console.log('Virhe tietokannassa: ', err);
-    if (err.code === 'PROTOCOL_CONNECTION_LOST') {
-      handleDisconnect();
-    } else {
-      throw err;
-    }
-  });
-}
-
-handleDisconnect();
+export const prisma = new PrismaClient()
 
 app.use(bodyParser.urlencoded({
   extended: false,
 }));
-app.use(bodyParser.json());
 
-/*app.use(function(req, res, next) {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
-});*/
+app.use(bodyParser.json());
 
 app.use(function(req, res, next) {
 
@@ -87,850 +44,270 @@ app.use(function(req, res, next) {
 
 // parametrien kirjoitustapa selaimessa : http://localhost:3000/api/players?group=Sikailijat
 
-app.get('/api/players',
-    /**
-     * Palauta pelaajat ryhmästä x
-     */
-    function(req, res) {
-      console.log('Get players from a certain group');
-      let q = url.parse(req.url, true).query;
-      let group = q.group;
-      let alteredResult;
-      let string;
 
-      let sql = 'SELECT pelaajat.nimi, statistiikat.pelatutlkm, statistiikat.voitotlkm'
-          + ' FROM pelaajat, statistiikat, ryhmat'
-          + ' WHERE pelaajat.ryhmaid = ryhmat.ryhmaid and ryhmat.nimi = ? and'
-          + ' pelaajat.pelaajaid = statistiikat.pelaajaid'
-          + ' ORDER BY pelaajat.nimi';
-
-      const query = util.promisify(con.query).bind(con);
-      if (textInputCheck(group) === true) {
-        (async () => {
-          try {
-            const rows = await query(sql, [group]);
-            string = JSON.stringify(rows);
-            alteredResult = '{"numOfRows":' + rows.length + ',"rows":' +
-                string + '}';
-            console.log(rows);
-            res.send(alteredResult);
-          } catch (err) {
-            console.log('Database error!' + err);
-          } finally {
-            //conn.end();
-          }
-        })();
-      } else {
-        console.log('Syöte ei hyväksytty!');
-      }
-    });
+app.get('/api/players', async (req, res) => {
+  const group = req.query.group
+  console.log('Get players from group ' + group)
+  
+  if (!textInputCheck(group)) return res.status(400).send('Syöte ei hyväksytty!')
+    
+  try {
+    const players = await prisma.pelaajat.findMany({
+      where: {
+        ryhmat: { is: { nimi: group } },
+        statistiikat: { isNot: null },
+      },
+      select: {
+        nimi: true,
+        statistiikat: { select: { pelatutlkm: true, voitotlkm: true } },
+      },
+      orderBy: { nimi: 'asc' },
+    })
+    
+    const rows = players.map(p => ({
+      nimi: p.nimi,
+      pelatutlkm: p.statistiikat?.pelatutlkm ?? 0,
+      voitotlkm: p.statistiikat?.voitotlkm ?? 0,
+    }))
+    
+    res.json({ numOfRows: rows.length, rows })
+  } catch (err) {
+    console.error('Database error!', err)
+    res.status(500).send('Database error!')
+  }
+})
 
 // parametrien kirjoitustapa selaimessa : http://localhost:3000/api/login?group=Sikailijat&password=asd
-app.get('/api/login',
-    /**
-     * Tarkista kirjautumistiedot
-     */
-    function(req, res) {
-      console.log('Checks your group');
-      let q = url.parse(req.url, true).query;
-      let group = q.group;
-      let password = q.password;
-      let alteredResult;
-      let string;
+app.get('/api/login', async (req, res) => {
+  const { group, password } = req.query
+  console.log('Login for group ' + group)
 
-      let sql = 'SELECT ryhmat.nimi, ryhmat.salasana'
-          + ' FROM ryhmat'
-          + ' WHERE ryhmat.nimi = ?';
+  if (!textInputCheck(group) || !textInputCheck(password)) {
+    return res.status(400).send('Syöte ei hyväksytty!')
+  }
 
-      const query = util.promisify(con.query).bind(con);
-      if (textInputCheck(group) === true && textInputCheck(password) === true) {
-        (async () => {
-          try {
-            const rows = await query(sql, [group, password]);
-            string = JSON.stringify(rows);
-            alteredResult = '{"numOfRows":' + rows.length + ',"rows":' +
-                string + '}';
-            hashedPw = rows[0].salasana
-            console.log(rows);
-            console.log(password);
-            console.log(hashedPw);
-            bcrypt.compare(password, hashedPw, function(err, result) {
-              if(result) {
-                console.log('salasana oikein');
-                res.send(alteredResult);
-              }
+  try {
+    const row = await prisma.ryhmat.findUnique({
+      where: { nimi: String(group) },
+      select: { nimi: true, salasana: true },
+    })
 
-              else {
-                console.log('salasana väärin');
-                alteredResult = 'Salasana väärin'
-                res.send(alteredResult)
-              }
+    if (!row) return res.status(401).send('Salasana väärin')
 
-            });
+    const ok = await bcrypt.compare(String(password), row.salasana)
+    if (!ok) return res.status(401).send('Salasana väärin')
 
-
-
-          } catch (err) {
-            console.log('Database error!' + err);
-          } finally {
-            //conn.end();
-          }
-        })();
-      } else {
-        console.log('Syöte ei hyväksytty!');
-      }
-    });
+    const rows = [{ nimi: row.nimi }]
+    return res.json({ numOfRows: rows.length, rows })
+  } catch (err) {
+    console.error('Database error!', err)
+    return res.status(500).send('Database error!')
+  }
+})
 
 // parametrien kirjoitustapa selaimessa : http://localhost:3000/api/player?group=Sikailijat&player=Onni
-app.get('/api/player',
-    /**
-     * Hae pelaaja y ryhmästä x
-     */
-    function(req, res) {
-      console.log('Get stats of one player');
-      let q = url.parse(req.url, true).query;
-      let group = q.group;
-      let player = q.player;
-      let alteredResult;
-      let string;
+app.get('/api/player', async (req, res) => {
+  const { group, player } = req.query
+  console.log('Get stats of player ' + player + ' in group ' + group)
 
-      let sql = 'SELECT pelaajat.nimi, statistiikat.pelatutlkm, statistiikat.voitotlkm,'
-          +
-          ' statistiikat.p0, statistiikat.p1, statistiikat.p2, statistiikat.p3, statistiikat.p4,'
-          +
-          ' statistiikat.p5, statistiikat.p6, statistiikat.p7, statistiikat.p8, statistiikat.p9,'
-          + ' statistiikat.p10, statistiikat.p11, statistiikat.p12'
-          + ' FROM pelaajat, statistiikat, ryhmat'
-          + ' WHERE pelaajat.ryhmaid = ryhmat.ryhmaid and ryhmat.nimi = ? and'
-          +
-          ' pelaajat.pelaajaid = statistiikat.pelaajaid and pelaajat.nimi = ?';
+  if (!textInputCheck(group) || !textInputCheck(player)) {
+    return res.status(400).send('Syöte ei hyväksytty!')
+  }
 
-      const query = util.promisify(con.query).bind(con);
-      if (textInputCheck(group) === true && textInputCheck(player) === true) {
-        (async () => {
-          try {
-            const rows = await query(sql, [group, player]);
-            string = JSON.stringify(rows);
-            alteredResult = '{"numOfRows":' + rows.length + ',"rows":' +
-                string + '}';
-            console.log(rows);
-            res.send(alteredResult);
+  try {
+    const row = await prisma.pelaajat.findFirst({
+      where: {
+        nimi: String(player),
+        ryhmat: { is: { nimi: String(group) } },
+        statistiikat: { isNot: null },
+      },
+      select: {
+        nimi: true,
+        statistiikat: true 
+      },
+    })
 
-          } catch (err) {
-            console.log('Database error!' + err);
-          } finally {
-            //conn.end();
-          }
-        })();
-      } else {
-        console.log('Syöte ei hyväksytty!');
-      }
-    });
+    const rows = row
+      ? [{ nimi: row.nimi, ...row.statistiikat }]
+      : []
+
+    return res.json({ numOfRows: rows.length, rows })
+  } catch (err) {
+    console.error('Database error!', err)
+    return res.status(500).send('Database error!')
+  }
+})
 
 // parametrien kirjoitustapa selaimessa : http://localhost:3000/api/games?group=asd
-app.get('/api/games',
-    /**
-     * Hae pelit ryhmältä x
-     */
-    function(req, res) {
-      console.log('Get list of played games');
-      let q = url.parse(req.url, true).query;
-      let group = q.group;
-      let alteredResult;
-      let string;
+app.get('/api/games', async (req, res) => {
+  const group = req.query.group
+  console.log('Get list of played games for group ' + group)
 
-      let sql = 'SELECT pelit.pvm, pelaajat.nimi'
-          + ' FROM pelit, ryhmat, pelaajat'
-          + ' WHERE pelit.ryhmaid = ryhmat.ryhmaid and ryhmat.nimi = ?'
-          + ' and pelaajat.pelaajaid = pelit.voittajaid'
-          + ' ORDER BY pelit.pvm';
+  if (!textInputCheck(group)) return res.status(400).send('Syöte ei hyväksytty!')
 
-      const query = util.promisify(con.query).bind(con);
-      if (textInputCheck(group) === true) {
-        (async () => {
-          try {
-            const rows = await query(sql, [group]);
-            string = JSON.stringify(rows);
-            alteredResult = '{"numOfRows":' + rows.length + ',"rows":' +
-                string + '}';
-            console.log(rows);
-            res.send(alteredResult);
+  try {
+    const games = await prisma.pelit.findMany({
+      where: { ryhmat: { is: { nimi: String(group) } } },
+      include: { pelaajat: { select: { nimi: true } } },
+      orderBy: { pvm: 'asc' },
+    })
 
-          } catch (err) {
-            console.log('Database error!' + err);
-          } finally {
-            //conn.end();
-          }
-        })();
-      } else {
-        console.log('Syöte ei hyväksytty!');
-      }
-    });
+    const rows = games.map(g => ({
+      pvm: g.pvm.toISOString().slice(0, 10),
+      nimi: g.pelaajat.nimi,
+    }))
+
+    res.json({ numOfRows: rows.length, rows })
+  } catch (err) {
+    console.error('Database error!', err)
+    res.status(500).send('Database error!')
+  }
+})
 
 // parametrien kirjoitustapa selaimessa : http://localhost:3000/api/newgroup
-app.post('/api/newgroup',
+app.post('/api/newgroup', async (req, res) => {
+  const { nimi, salasana } = req.body || {}
+  console.log('Create a new group ' + nimi)
 
-    /**
-     * Lisää uusi ryhmä
-     */
-    function(req, res) {
-      console.log('Got a POST request for the homepage');
-      const query = util.promisify(con.query).bind(con);
-      let jsonOBJ = req.body;
-      console.log(jsonOBJ);
-      let sqlquery = 'SELECT nimi FROM ryhmat';
-      if (textInputCheck(jsonOBJ.nimi) === true &&
-          textInputCheck(jsonOBJ.salasana) === true) {
-        (async () => {
-          try {
-            const rows = await query(sqlquery);
-            console.log(rows);
-            let equals = false;
-            for (let i = 0; i < rows.length; i++) {
-              if (jsonOBJ.nimi === rows[i].nimi) {
-                equals = true;
-              }
-            }
-            if (equals === false) {
-              console.log(jsonOBJ.salasana)
-              hashedPw = await bcrypt.hash(jsonOBJ.salasana, saltRounds);
-              console.log(hashedPw)
-              sqlquery = 'INSERT INTO ryhmat (nimi, salasana) VALUES (?, ?)';
-              await query(sqlquery, [jsonOBJ.nimi, hashedPw]);
-              res.send('Post successful' + req.body);
-            } else {
-              res.send('Ryhmän nimi on jo käytössä');
-            }
-          } catch (err) {
-            console.log('Database error!' + err);
-          } finally {
-            //conn.end();
-          }
-        })();
-      } else {
-        console.log('Syöte ei hyväksytty!');
-      }
-    });
+  if (!textInputCheck(nimi) || !textInputCheck(salasana)) {
+    return res.status(400).send('Syöte ei hyväksytty!')
+  }
+
+  try {
+    const hash = await bcrypt.hash(String(salasana), saltRounds)
+
+    await prisma.ryhmat.create({
+      data: { nimi: String(nimi), salasana: hash },
+    })
+
+    return res.json({ ok: true, nimi })
+  } catch (err) {
+    if (err?.code === 'P2002') {
+      return res.status(409).send('Ryhmän nimi on jo käytössä')
+    }
+    console.error('Database error!', err)
+    return res.status(500).send('Database error!')
+  }
+})
 
 // parametrien kirjoitustapa selaimessa : http://localhost:3000/api/newplayer
-app.post('/api/newplayer',
-    /**
-     * Lisää uusi pelaaja ryhmään x
-     */
-    function(req, res) {
-      console.log('Create a new player');
-      const query = util.promisify(con.query).bind(con);
-      let jsonOBJ = req.body;
-      console.log(jsonOBJ);
-      let ryhmaid;
-      let sqlquery = 'SELECT ryhmaid FROM ryhmat WHERE nimi = ?';
-      if (textInputCheck(jsonOBJ.pelaajan_nimi) === true) {
-        (async () => {
-          try {
-            ryhmaid = await query(sqlquery, [jsonOBJ.ryhman_nimi]);
-            sqlquery = 'SELECT nimi FROM pelaajat WHERE ryhmaid = ?';
-            const rows = await query(sqlquery, [ryhmaid[0].ryhmaid]);
-            console.log(ryhmaid);
-            console.log(rows);
-            let equals = false;
-            for (let i = 0; i < rows.length; i++) {
-              if (jsonOBJ.pelaajan_nimi === rows[i].nimi) {
-                equals = true;
-              }
-            }
-            if (equals === false) {
-              sqlquery = 'INSERT INTO pelaajat (nimi, ryhmaid) VALUES (?, ?)';
-              await query(sqlquery,
-                  [jsonOBJ.pelaajan_nimi, ryhmaid[0].ryhmaid]);
-              res.send('Post successful' + req.body);
-            } else {
-              res.send('Saman niminen pelaaja on jo lisätty');
-            }
-          } catch (err) {
-            console.log('Database error! ' + err);
-          } finally {
-            //conn.end();
-          }
-        })();
-      } else {
-        console.log('Syöte ei hyväksytty!');
+app.post('/api/newplayer', async (req, res) => {
+  const { pelaajan_nimi, ryhman_nimi } = req.body || {}
+  console.log('Create a new player ' + pelaajan_nimi + ' for group ' + ryhman_nimi)
+
+  if (!textInputCheck(pelaajan_nimi) || !textInputCheck(ryhman_nimi)) {
+    return res.status(400).send('Syöte ei hyväksytty!')
+  }
+
+  try {
+    // 1) Find group by unique name
+    const group = await prisma.ryhmat.findUnique({
+      where: { nimi: String(ryhman_nimi) },
+      select: { ryhmaid: true },
+    })
+    if (!group) return res.status(404).send('Ryhmää ei löytynyt')
+
+    // 2) Check if a player with the same name already exists in this group
+    const exists = await prisma.pelaajat.findFirst({
+      where: { ryhmaid: group.ryhmaid, nimi: String(pelaajan_nimi) },
+      select: { pelaajaid: true },
+    })
+    if (exists) return res.status(409).send('Saman niminen pelaaja on jo lisätty')
+
+    // 3) Create player
+    await prisma.pelaajat.create({
+      data: {
+        nimi: String(pelaajan_nimi),
+        ryhmat: { connect: { ryhmaid: group.ryhmaid } }, // or: ryhmaid: group.ryhmaid
+      },
+    })
+
+    return res.send('Post successful' + req.body)
+  } catch (err) {
+    console.error('Database error! ', err)
+    return res.status(500).send('Database error!')
+  }
+})
+
+
+app.post('/api/newgame', async (req, res) => {
+  try {
+    const body = req.body
+    console.log('Save a new game for group ' + body.ryhman_nimi)
+
+    if (!textInputCheck(body.ryhman_nimi)) {
+      return res.status(400).send('Syöte ei hyväksytty!')
+    }
+
+    const group = await prisma.ryhmat.findUnique({
+      where: { nimi: body.ryhman_nimi },
+      select: { ryhmaid: true },
+    })
+    if (!group) return res.status(404).send('Ryhmää ei löytynyt')
+
+    const winner = await prisma.pelaajat.findFirst({
+      where: { nimi: body.voittajan_nimi, ryhmaid: group.ryhmaid },
+      select: { pelaajaid: true },
+    })
+    if (!winner) return res.status(404).send('Voittajaa ei löytynyt ryhmästä')
+
+    const n = (v) => (v == null || Number.isNaN(Number(v)) ? 0 : Number(v))
+
+    const peli = await prisma.$transaction(async (tx) => {
+      const created = await tx.pelit.create({
+        data: {
+          pvm: body.pvm ? new Date(body.pvm) : new Date(),
+          ryhmat:   { connect: { ryhmaid: group.ryhmaid } },
+          pelaajat: { connect: { pelaajaid: winner.pelaajaid } },
+        },
+        select: { peliid: true },
+      })
+
+      for (let i = 1; i <= 10; i++) {
+        const p = body[`pelaaja${i}`]
+        if (!p || !p.nimi) continue
+
+        const dbPlayer = await tx.pelaajat.findFirst({
+          where: { nimi: p.nimi, ryhmaid: group.ryhmaid },
+          select: { pelaajaid: true },
+        })
+        if (!dbPlayer) continue // or throw if you want strict behavior
+
+        const isWinner = dbPlayer.pelaajaid === winner.pelaajaid
+
+        const POINTS = ['p0','p1','p2','p3','p4','p5','p6','p7','p8','p9','p10','p11','p12']
+
+        const initialPoints = Object.fromEntries(POINTS.map(point => [point, n(p[point])]))
+        const onCreate = {
+            pelaajaid:  dbPlayer.pelaajaid,
+            pelatutlkm: 1,
+            voitotlkm:  isWinner ? 1 : 0,
+            ...initialPoints,
+        }
+
+        const pointIncs = Object.fromEntries(POINTS.map(point => [point, { increment: n(p[point]) }]))
+        const onUpdate = {
+          pelatutlkm: { increment: 1 },
+          ...(isWinner ? { voitotlkm: { increment: 1 } } : {}),
+          ...pointIncs,
+        }
+
+        await tx.statistiikat.upsert({
+          where: { pelaajaid: dbPlayer.pelaajaid }, // unique in your schema
+          create: onCreate,
+          update: onUpdate
+        })
       }
-    });
 
-// parametrien kirjoitustapa selaimessa : http://localhost:3000/api/newgame
-app.post('/api/newgame',
-    /**
-     * Lisää peli
-     */
-    function(req, res) {
-      console.log('Got a POST request for the homepage');
-      const query = util.promisify(con.query).bind(con);
-      let jsonOBJ = req.body;
-      console.log(jsonOBJ);
-      let ryhmaid;
-      let voittajaid;
-      let pelaajaid;
-      let sqlquery = 'SELECT ryhmaid FROM ryhmat WHERE nimi = ?';
-      if (textInputCheck(jsonOBJ.ryhman_nimi) === true) {
-        (async () => {
-          try {
-            ryhmaid = await query(sqlquery, [jsonOBJ.ryhman_nimi]);
+      return created
+    })
 
-            sqlquery = 'SELECT pelaajaid FROM pelaajat WHERE nimi = ? and ryhmaid = ?';
-            voittajaid = await query(sqlquery,
-                [jsonOBJ.voittajan_nimi, ryhmaid[0].ryhmaid]);
-
-            sqlquery = 'INSERT INTO pelit (ryhmaid, voittajaid, pvm) VALUES (?, ?, ?)';
-            await query(sqlquery,
-                [ryhmaid[0].ryhmaid, voittajaid[0].pelaajaid, jsonOBJ.pvm]);
-            res.send('Post successful' + req.body);
-
-            let sqlqueryVoitto = 'UPDATE statistiikat SET pelatutlkm = pelatutlkm + 1, '
-                + 'voitotlkm = voitotlkm + 1, p0 = p0 + ?, p1 = p1 + ?, '
-                + 'p2 = p2 + ?, p3 = p3 + ?, p4 = p4 + ?, p5 = p5 + ?, '
-                + 'p6 = p6 + ?, p7 = p7 + ?, p8 = p8 + ?, p9 = p9 + ?,'
-                + ' p10 = p10 + ?, p11 = p11 + ?, p12 = p12 + ? '
-                + 'WHERE pelaajaid = ?';
-
-            let sqlqueryHavio = 'UPDATE statistiikat SET pelatutlkm = pelatutlkm + 1, '
-                + 'p0 = p0 + ?, p1 = p1 + ?, '
-                + 'p2 = p2 + ?, p3 = p3 + ?, p4 = p4 + ?, p5 = p5 + ?, '
-                + 'p6 = p6 + ?, p7 = p7 + ?, p8 = p8 + ?, p9 = p9 + ?,'
-                + ' p10 = p10 + ?, p11 = p11 + ?, p12 = p12 + ? '
-                + 'WHERE pelaajaid = ?';
-
-            // const pelaajat = [
-            //     "pelaaja1",
-            //     "pelaaja2",
-            //     "pelaaja3",
-            //     "pelaaja4",
-            //     "pelaaja5",
-            //     "pelaaja6",
-            //     "pelaaja7",
-            //     "pelaaja8",
-            //     "pelaaja9",
-            //     "pelaaja10"
-            // ];
-
-            // const points = ["p1","p2","p3","p4","p5","p6","p7","p8","p9","p10","p11","p12"];
-
-            // for (const playerID in pelaajat) {
-            //   const queryParamArr = [
-            //       ...points.reduce((acc,cur) => [...acc, jsonOBJ[playerID][cur]], []),
-            //       pelaajaid[0].pelaajaid
-            //   ];
-
-            //   if (jsonOBJ[playerID].nimi !== "") {
-            //     sqlquery = "SELECT pelaajaid FROM pelaajat WHERE nimi = ? and ryhmaid = ?";
-            //     pelaajaid = await query(sqlquery, [jsonOBJ[playerID].nimi, ryhmaid[0].ryhmaid]);
-            //     if (voittajaid[0].pelaajaid === pelaajaid[0].pelaajaid) {
-            //       console.log("p1voitto");
-            //       await query(sqlqueryVoitto, queryParamArr);
-            //     } else {
-            //       console.log("p1häviö");
-            //       await query(sqlqueryHavio, queryParamArr);
-            //     }
-            //   }
-            // }
-
-            if (jsonOBJ.pelaaja1.nimi !== '') {
-              sqlquery = 'SELECT pelaajaid FROM pelaajat WHERE nimi = ? and ryhmaid = ?';
-              pelaajaid = await query(sqlquery,
-                  [jsonOBJ.pelaaja1.nimi, ryhmaid[0].ryhmaid]);
-              if (voittajaid[0].pelaajaid === pelaajaid[0].pelaajaid) {
-                console.log('p1voitto');
-                await query(sqlqueryVoitto, [
-                  jsonOBJ.pelaaja1.p0,
-                  jsonOBJ.pelaaja1.p1,
-                  jsonOBJ.pelaaja1.p2
-                  ,
-                  jsonOBJ.pelaaja1.p3,
-                  jsonOBJ.pelaaja1.p4,
-                  jsonOBJ.pelaaja1.p5,
-                  jsonOBJ.pelaaja1.p6
-                  ,
-                  jsonOBJ.pelaaja1.p7,
-                  jsonOBJ.pelaaja1.p8,
-                  jsonOBJ.pelaaja1.p9,
-                  jsonOBJ.pelaaja1.p10
-                  ,
-                  jsonOBJ.pelaaja1.p11,
-                  jsonOBJ.pelaaja1.p12,
-                  pelaajaid[0].pelaajaid]);
-              } else {
-                console.log('p1häviö');
-                await query(sqlqueryHavio, [
-                  jsonOBJ.pelaaja1.p0,
-                  jsonOBJ.pelaaja1.p1,
-                  jsonOBJ.pelaaja1.p2
-                  ,
-                  jsonOBJ.pelaaja1.p3,
-                  jsonOBJ.pelaaja1.p4,
-                  jsonOBJ.pelaaja1.p5,
-                  jsonOBJ.pelaaja1.p6
-                  ,
-                  jsonOBJ.pelaaja1.p7,
-                  jsonOBJ.pelaaja1.p8,
-                  jsonOBJ.pelaaja1.p9,
-                  jsonOBJ.pelaaja1.p10
-                  ,
-                  jsonOBJ.pelaaja1.p11,
-                  jsonOBJ.pelaaja1.p12,
-                  pelaajaid[0].pelaajaid]);
-              }
-
-            }
-
-            if (jsonOBJ.pelaaja2.nimi !== '') {
-              sqlquery = 'SELECT pelaajaid FROM pelaajat WHERE nimi = ? and ryhmaid = ?';
-              pelaajaid = await query(sqlquery,
-                  [jsonOBJ.pelaaja2.nimi, ryhmaid[0].ryhmaid]);
-              if (voittajaid[0].pelaajaid === pelaajaid[0].pelaajaid) {
-
-                await query(sqlqueryVoitto, [
-                  jsonOBJ.pelaaja2.p0,
-                  jsonOBJ.pelaaja2.p1,
-                  jsonOBJ.pelaaja2.p2
-                  ,
-                  jsonOBJ.pelaaja2.p3,
-                  jsonOBJ.pelaaja2.p4,
-                  jsonOBJ.pelaaja2.p5,
-                  jsonOBJ.pelaaja2.p6
-                  ,
-                  jsonOBJ.pelaaja2.p7,
-                  jsonOBJ.pelaaja2.p8,
-                  jsonOBJ.pelaaja2.p9,
-                  jsonOBJ.pelaaja2.p10
-                  ,
-                  jsonOBJ.pelaaja2.p11,
-                  jsonOBJ.pelaaja2.p12,
-                  pelaajaid[0].pelaajaid]);
-              } else {
-
-                await query(sqlqueryHavio, [
-                  jsonOBJ.pelaaja2.p0,
-                  jsonOBJ.pelaaja2.p1,
-                  jsonOBJ.pelaaja2.p2
-                  ,
-                  jsonOBJ.pelaaja2.p3,
-                  jsonOBJ.pelaaja2.p4,
-                  jsonOBJ.pelaaja2.p5,
-                  jsonOBJ.pelaaja2.p6
-                  ,
-                  jsonOBJ.pelaaja2.p7,
-                  jsonOBJ.pelaaja2.p8,
-                  jsonOBJ.pelaaja2.p9,
-                  jsonOBJ.pelaaja2.p10
-                  ,
-                  jsonOBJ.pelaaja2.p11,
-                  jsonOBJ.pelaaja2.p12,
-                  pelaajaid[0].pelaajaid]);
-
-              }
-
-            }
-
-            if (jsonOBJ.pelaaja3.nimi !== '') {
-              sqlquery = 'SELECT pelaajaid FROM pelaajat WHERE nimi = ? and ryhmaid = ?';
-              pelaajaid = await query(sqlquery,
-                  [jsonOBJ.pelaaja3.nimi, ryhmaid[0].ryhmaid]);
-
-              if (voittajaid[0].pelaajaid === pelaajaid[0].pelaajaid) {
-
-                await query(sqlqueryVoitto, [
-                  jsonOBJ.pelaaja1.p0,
-                  jsonOBJ.pelaaja1.p1,
-                  jsonOBJ.pelaaja1.p2
-                  ,
-                  jsonOBJ.pelaaja3.p3,
-                  jsonOBJ.pelaaja3.p4,
-                  jsonOBJ.pelaaja3.p5,
-                  jsonOBJ.pelaaja3.p6
-                  ,
-                  jsonOBJ.pelaaja3.p7,
-                  jsonOBJ.pelaaja3.p8,
-                  jsonOBJ.pelaaja3.p9,
-                  jsonOBJ.pelaaja3.p10
-                  ,
-                  jsonOBJ.pelaaja3.p11,
-                  jsonOBJ.pelaaja3.p12,
-                  pelaajaid[0].pelaajaid]);
-              } else {
-
-                await query(sqlqueryHavio, [
-                  jsonOBJ.pelaaja3.p0,
-                  jsonOBJ.pelaaja3.p1,
-                  jsonOBJ.pelaaja3.p2
-                  ,
-                  jsonOBJ.pelaaja3.p3,
-                  jsonOBJ.pelaaja3.p4,
-                  jsonOBJ.pelaaja3.p5,
-                  jsonOBJ.pelaaja3.p6
-                  ,
-                  jsonOBJ.pelaaja3.p7,
-                  jsonOBJ.pelaaja3.p8,
-                  jsonOBJ.pelaaja3.p9,
-                  jsonOBJ.pelaaja3.p10
-                  ,
-                  jsonOBJ.pelaaja3.p11,
-                  jsonOBJ.pelaaja3.p12,
-                  pelaajaid[0].pelaajaid]);
-              }
-
-            }
-
-            if (jsonOBJ.pelaaja4.nimi !== '') {
-              sqlquery = 'SELECT pelaajaid FROM pelaajat WHERE nimi = ? and ryhmaid = ?';
-              pelaajaid = await query(sqlquery,
-                  [jsonOBJ.pelaaja4.nimi, ryhmaid[0].ryhmaid]);
-
-              if (voittajaid[0].pelaajaid === pelaajaid[0].pelaajaid) {
-
-                await query(sqlqueryVoitto, [
-                  jsonOBJ.pelaaja4.p0,
-                  jsonOBJ.pelaaja4.p1,
-                  jsonOBJ.pelaaja4.p2
-                  ,
-                  jsonOBJ.pelaaja4.p3,
-                  jsonOBJ.pelaaja4.p4,
-                  jsonOBJ.pelaaja4.p5,
-                  jsonOBJ.pelaaja4.p6
-                  ,
-                  jsonOBJ.pelaaja4.p7,
-                  jsonOBJ.pelaaja4.p8,
-                  jsonOBJ.pelaaja4.p9,
-                  jsonOBJ.pelaaja4.p10
-                  ,
-                  jsonOBJ.pelaaja4.p11,
-                  jsonOBJ.pelaaja4.p12,
-                  pelaajaid[0].pelaajaid]);
-              } else {
-
-                await query(sqlqueryHavio, [
-                  jsonOBJ.pelaaja4.p0,
-                  jsonOBJ.pelaaja4.p1,
-                  jsonOBJ.pelaaja4.p2
-                  ,
-                  jsonOBJ.pelaaja4.p3,
-                  jsonOBJ.pelaaja4.p4,
-                  jsonOBJ.pelaaja4.p5,
-                  jsonOBJ.pelaaja4.p6
-                  ,
-                  jsonOBJ.pelaaja4.p7,
-                  jsonOBJ.pelaaja4.p8,
-                  jsonOBJ.pelaaja4.p9,
-                  jsonOBJ.pelaaja4.p10
-                  ,
-                  jsonOBJ.pelaaja4.p11,
-                  jsonOBJ.pelaaja4.p12,
-                  pelaajaid[0].pelaajaid]);
-              }
-
-            }
-
-            if (jsonOBJ.pelaaja5.nimi !== '') {
-              sqlquery = 'SELECT pelaajaid FROM pelaajat WHERE nimi = ? and ryhmaid = ?';
-              pelaajaid = await query(sqlquery,
-                  [jsonOBJ.pelaaja5.nimi, ryhmaid[0].ryhmaid]);
-
-              if (voittajaid[0].pelaajaid === pelaajaid[0].pelaajaid) {
-
-                await query(sqlqueryVoitto, [
-                  jsonOBJ.pelaaja5.p0,
-                  jsonOBJ.pelaaja5.p1,
-                  jsonOBJ.pelaaja5.p2
-                  ,
-                  jsonOBJ.pelaaja5.p3,
-                  jsonOBJ.pelaaja5.p4,
-                  jsonOBJ.pelaaja5.p5,
-                  jsonOBJ.pelaaja5.p6
-                  ,
-                  jsonOBJ.pelaaja5.p7,
-                  jsonOBJ.pelaaja5.p8,
-                  jsonOBJ.pelaaja5.p9,
-                  jsonOBJ.pelaaja5.p10
-                  ,
-                  jsonOBJ.pelaaja5.p11,
-                  jsonOBJ.pelaaja5.p12,
-                  pelaajaid[0].pelaajaid]);
-              } else {
-
-                await query(sqlqueryHavio, [
-                  jsonOBJ.pelaaja5.p0,
-                  jsonOBJ.pelaaja5.p1,
-                  jsonOBJ.pelaaja5.p2
-                  ,
-                  jsonOBJ.pelaaja5.p3,
-                  jsonOBJ.pelaaja5.p4,
-                  jsonOBJ.pelaaja5.p5,
-                  jsonOBJ.pelaaja5.p6
-                  ,
-                  jsonOBJ.pelaaja5.p7,
-                  jsonOBJ.pelaaja5.p8,
-                  jsonOBJ.pelaaja5.p9,
-                  jsonOBJ.pelaaja5.p10
-                  ,
-                  jsonOBJ.pelaaja5.p11,
-                  jsonOBJ.pelaaja5.p12,
-                  pelaajaid[0].pelaajaid]);
-              }
-
-            }
-
-            if (jsonOBJ.pelaaja6.nimi !== '') {
-              sqlquery = 'SELECT pelaajaid FROM pelaajat WHERE nimi = ? and ryhmaid = ?';
-              pelaajaid = await query(sqlquery,
-                  [jsonOBJ.pelaaja6.nimi, ryhmaid[0].ryhmaid]);
-
-              if (voittajaid[0].pelaajaid === pelaajaid[0].pelaajaid) {
-
-                await query(sqlqueryVoitto, [
-                  jsonOBJ.pelaaja6.p0,
-                  jsonOBJ.pelaaja6.p1,
-                  jsonOBJ.pelaaja6.p2
-                  ,
-                  jsonOBJ.pelaaja6.p3,
-                  jsonOBJ.pelaaja6.p4,
-                  jsonOBJ.pelaaja6.p5,
-                  jsonOBJ.pelaaja6.p6
-                  ,
-                  jsonOBJ.pelaaja6.p7,
-                  jsonOBJ.pelaaja6.p8,
-                  jsonOBJ.pelaaja6.p9,
-                  jsonOBJ.pelaaja6.p10
-                  ,
-                  jsonOBJ.pelaaja6.p11,
-                  jsonOBJ.pelaaja6.p12,
-                  pelaajaid[0].pelaajaid]);
-              } else {
-
-                await query(sqlqueryHavio, [
-                  jsonOBJ.pelaaja6.p0,
-                  jsonOBJ.pelaaja6.p1,
-                  jsonOBJ.pelaaja6.p2
-                  ,
-                  jsonOBJ.pelaaja6.p3,
-                  jsonOBJ.pelaaja6.p4,
-                  jsonOBJ.pelaaja6.p5,
-                  jsonOBJ.pelaaja6.p6
-                  ,
-                  jsonOBJ.pelaaja6.p7,
-                  jsonOBJ.pelaaja6.p8,
-                  jsonOBJ.pelaaja6.p9,
-                  jsonOBJ.pelaaja6.p10
-                  ,
-                  jsonOBJ.pelaaja6.p11,
-                  jsonOBJ.pelaaja6.p12,
-                  pelaajaid[0].pelaajaid]);
-              }
-
-            }
-
-            if (jsonOBJ.pelaaja7.nimi !== '') {
-              sqlquery = 'SELECT pelaajaid FROM pelaajat WHERE nimi = ? and ryhmaid = ?';
-              pelaajaid = await query(sqlquery,
-                  [jsonOBJ.pelaaja7.nimi, ryhmaid[0].ryhmaid]);
-
-              if (voittajaid[0].pelaajaid === pelaajaid[0].pelaajaid) {
-
-                await query(sqlqueryVoitto, [
-                  jsonOBJ.pelaaja7.p0,
-                  jsonOBJ.pelaaja7.p1,
-                  jsonOBJ.pelaaja7.p2
-                  ,
-                  jsonOBJ.pelaaja7.p3,
-                  jsonOBJ.pelaaja7.p4,
-                  jsonOBJ.pelaaja7.p5,
-                  jsonOBJ.pelaaja7.p6
-                  ,
-                  jsonOBJ.pelaaja7.p7,
-                  jsonOBJ.pelaaja7.p8,
-                  jsonOBJ.pelaaja7.p9,
-                  jsonOBJ.pelaaja7.p10
-                  ,
-                  jsonOBJ.pelaaja7.p11,
-                  jsonOBJ.pelaaja7.p12,
-                  pelaajaid[0].pelaajaid]);
-              } else {
-
-                await query(sqlqueryHavio, [
-                  jsonOBJ.pelaaja7.p0,
-                  jsonOBJ.pelaaja7.p1,
-                  jsonOBJ.pelaaja7.p2
-                  ,
-                  jsonOBJ.pelaaja7.p3,
-                  jsonOBJ.pelaaja7.p4,
-                  jsonOBJ.pelaaja7.p5,
-                  jsonOBJ.pelaaja7.p6
-                  ,
-                  jsonOBJ.pelaaja7.p7,
-                  jsonOBJ.pelaaja7.p8,
-                  jsonOBJ.pelaaja7.p9,
-                  jsonOBJ.pelaaja7.p10
-                  ,
-                  jsonOBJ.pelaaja7.p11,
-                  jsonOBJ.pelaaja7.p12,
-                  pelaajaid[0].pelaajaid]);
-              }
-
-            }
-
-            if (jsonOBJ.pelaaja8.nimi !== '') {
-              sqlquery = 'SELECT pelaajaid FROM pelaajat WHERE nimi = ? and ryhmaid = ?';
-              pelaajaid = await query(sqlquery,
-                  [jsonOBJ.pelaaja8.nimi, ryhmaid[0].ryhmaid]);
-
-              if (voittajaid[0].pelaajaid === pelaajaid[0].pelaajaid) {
-
-                await query(sqlqueryVoitto, [
-                  jsonOBJ.pelaaja8.p0,
-                  jsonOBJ.pelaaja8.p1,
-                  jsonOBJ.pelaaja8.p2
-                  ,
-                  jsonOBJ.pelaaja8.p3,
-                  jsonOBJ.pelaaja8.p4,
-                  jsonOBJ.pelaaja8.p5,
-                  jsonOBJ.pelaaja8.p6
-                  ,
-                  jsonOBJ.pelaaja8.p7,
-                  jsonOBJ.pelaaja8.p8,
-                  jsonOBJ.pelaaja8.p9,
-                  jsonOBJ.pelaaja8.p10
-                  ,
-                  jsonOBJ.pelaaja8.p11,
-                  jsonOBJ.pelaaja8.p12,
-                  pelaajaid[0].pelaajaid]);
-              } else {
-
-                await query(sqlqueryHavio, [
-                  jsonOBJ.pelaaja8.p0,
-                  jsonOBJ.pelaaja8.p1,
-                  jsonOBJ.pelaaja8.p2
-                  ,
-                  jsonOBJ.pelaaja8.p3,
-                  jsonOBJ.pelaaja8.p4,
-                  jsonOBJ.pelaaja8.p5,
-                  jsonOBJ.pelaaja8.p6
-                  ,
-                  jsonOBJ.pelaaja8.p7,
-                  jsonOBJ.pelaaja8.p8,
-                  jsonOBJ.pelaaja8.p9,
-                  jsonOBJ.pelaaja8.p10
-                  ,
-                  jsonOBJ.pelaaja8.p11,
-                  jsonOBJ.pelaaja8.p12,
-                  pelaajaid[0].pelaajaid]);
-              }
-
-            }
-
-            if (jsonOBJ.pelaaja9.nimi !== '') {
-              sqlquery = 'SELECT pelaajaid FROM pelaajat WHERE nimi = ? and ryhmaid = ?';
-              pelaajaid = await query(sqlquery,
-                  [jsonOBJ.pelaaja9.nimi, ryhmaid[0].ryhmaid]);
-
-              if (voittajaid[0].pelaajaid === pelaajaid[0].pelaajaid) {
-
-                await query(sqlqueryVoitto, [
-                  jsonOBJ.pelaaja9.p0,
-                  jsonOBJ.pelaaja9.p1,
-                  jsonOBJ.pelaaja9.p2
-                  ,
-                  jsonOBJ.pelaaja9.p3,
-                  jsonOBJ.pelaaja9.p4,
-                  jsonOBJ.pelaaja9.p5,
-                  jsonOBJ.pelaaja9.p6
-                  ,
-                  jsonOBJ.pelaaja9.p7,
-                  jsonOBJ.pelaaja9.p8,
-                  jsonOBJ.pelaaja9.p9,
-                  jsonOBJ.pelaaja9.p10
-                  ,
-                  jsonOBJ.pelaaja9.p11,
-                  jsonOBJ.pelaaja9.p12,
-                  pelaajaid[0].pelaajaid]);
-              } else {
-
-                await query(sqlqueryHavio, [
-                  jsonOBJ.pelaaja9.p0,
-                  jsonOBJ.pelaaja9.p1,
-                  jsonOBJ.pelaaja9.p2
-                  ,
-                  jsonOBJ.pelaaja9.p3,
-                  jsonOBJ.pelaaja9.p4,
-                  jsonOBJ.pelaaja9.p5,
-                  jsonOBJ.pelaaja9.p6
-                  ,
-                  jsonOBJ.pelaaja9.p7,
-                  jsonOBJ.pelaaja9.p8,
-                  jsonOBJ.pelaaja9.p9,
-                  jsonOBJ.pelaaja9.p10
-                  ,
-                  jsonOBJ.pelaaja9.p11,
-                  jsonOBJ.pelaaja9.p12,
-                  pelaajaid[0].pelaajaid]);
-              }
-
-            }
-
-            if (jsonOBJ.pelaaja10.nimi !== '') {
-              sqlquery = 'SELECT pelaajaid FROM pelaajat WHERE nimi = ? and ryhmaid = ?';
-              pelaajaid = await query(sqlquery,
-                  [jsonOBJ.pelaaja10.nimi, ryhmaid[0].ryhmaid]);
-
-              if (voittajaid[0].pelaajaid === pelaajaid[0].pelaajaid) {
-
-                await query(sqlqueryVoitto, [
-                  jsonOBJ.pelaaja10.p0,
-                  jsonOBJ.pelaaja10.p1,
-                  jsonOBJ.pelaaja10.p2
-                  ,
-                  jsonOBJ.pelaaja10.p3,
-                  jsonOBJ.pelaaja10.p4,
-                  jsonOBJ.pelaaja10.p5,
-                  jsonOBJ.pelaaja10.p6
-                  ,
-                  jsonOBJ.pelaaja10.p7,
-                  jsonOBJ.pelaaja10.p8,
-                  jsonOBJ.pelaaja10.p9,
-                  jsonOBJ.pelaaja10.p10
-                  ,
-                  jsonOBJ.pelaaja10.p11,
-                  jsonOBJ.pelaaja10.p12,
-                  pelaajaid[0].pelaajaid]);
-              } else {
-
-                await query(sqlqueryHavio, [
-                  jsonOBJ.pelaaja10.p0,
-                  jsonOBJ.pelaaja10.p1,
-                  jsonOBJ.pelaaja10.p2
-                  ,
-                  jsonOBJ.pelaaja10.p3,
-                  jsonOBJ.pelaaja10.p4,
-                  jsonOBJ.pelaaja10.p5,
-                  jsonOBJ.pelaaja10.p6
-                  ,
-                  jsonOBJ.pelaaja10.p7,
-                  jsonOBJ.pelaaja10.p8,
-                  jsonOBJ.pelaaja10.p9,
-                  jsonOBJ.pelaaja10.p10
-                  ,
-                  jsonOBJ.pelaaja10.p11,
-                  jsonOBJ.pelaaja10.p12,
-                  pelaajaid[0].pelaajaid]);
-              }
-            }
-
-          } catch (err) {
-            console.log('Database error!' + err);
-          } finally {
-            //conn.end();
-          }
-        })();
-      } else {
-        console.log('Syöte ei hyväksytty!');
-      }
-    });
+    return res.json({ ok: true, peliid: peli.peliid })
+  } catch (err) {
+    console.error('Database error!', err)
+    return res.status(500).send('Database error!')
+  }
+})
 
 const port = process.env.PORT || 3000;
 
