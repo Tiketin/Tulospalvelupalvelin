@@ -218,7 +218,8 @@ app.post('/api/newplayer', async (req, res) => {
     await prisma.pelaajat.create({
       data: {
         nimi: String(pelaajan_nimi),
-        ryhmat: { connect: { ryhmaid: group.ryhmaid } }, // or: ryhmaid: group.ryhmaid
+        ryhmat: { connect: { ryhmaid: group.ryhmaid } },
+        statistiikat: { create: {} }, 
       },
     })
 
