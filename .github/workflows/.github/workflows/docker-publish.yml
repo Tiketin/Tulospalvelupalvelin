@@ -6,7 +6,7 @@ on:
       - master
 
 env:
-  IMAGE_NAME: your-dockerhub-username/tulospalvelupalvelin
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/tulospalvelupalvelin
 
 jobs:
   docker:
