@@ -6,7 +6,7 @@ on:
       - master
 
 env:
-  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/tiketin:tulospalvelupalvelin
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/tiketin
 
 jobs:
   docker:
@@ -25,21 +25,19 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=sha,format=short
-            type=raw,value=latest
+      - name: Get short commit SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+
+          tags: |
+            ${{ env.IMAGE_NAME }}:tulospalvelupalvelin-${{ steps.vars.outputs.sha_short }}
+            ${{ env.IMAGE_NAME }}:tulospalvelupalvelin-latest
+
           cache-from: type=gha
           cache-to: type=gha,mode=max
