@@ -6,7 +6,7 @@ on:
       - master
 
 env:
-  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/tulospalvelupalvelin
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/tiketin:tulospalvelupalvelin
 
 jobs:
   docker:
