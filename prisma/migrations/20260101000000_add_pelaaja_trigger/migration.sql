@@ -1,10 +1,8 @@
--- 1. Create the trigger for ALL future player insertions
+-- 1. Create trigger (single statement, no BEGIN/END needed)
 CREATE TRIGGER trg_after_insert_pelaaja
 AFTER INSERT ON pelaajat
 FOR EACH ROW
-BEGIN
-    INSERT INTO statistiikat (pelaajaid) VALUES (NEW.pelaajaid);
-END;
+INSERT INTO statistiikat (pelaajaid) VALUES (NEW.pelaajaid);
 
 -- 2. Backfill missing statistiikat rows for EXISTING players
 INSERT INTO statistiikat (pelaajaid)
