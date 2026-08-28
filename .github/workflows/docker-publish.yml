@@ -41,3 +41,9 @@ jobs:
 
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Trigger Portainer Redeploy
+        run: |
+          curl -X POST "${{ secrets.PORTAINER_WEBHOOK_URL }}" \
+             -H "x-webhook-secret: ${{ secrets.WEBHOOK_SECRET }}" \
+             -H "User-Agent: GitHub-Actions-CI"
