@@ -233,82 +233,100 @@ app.post('/api/newplayer', async (req, res) => {
 
 app.post('/api/newgame', async (req, res) => {
   try {
-    const body = req.body
-    console.log('Save a new game for group ' + body.ryhman_nimi)
+    const body = req.body;
+    console.log('Save a new game for group ' + body.ryhman_nimi);
 
     if (!textInputCheck(body.ryhman_nimi)) {
-      return res.status(400).send('Syöte ei hyväksytty!')
+      return res.status(400).send('Syöte ei hyväksytty!');
     }
 
     const group = await prisma.ryhmat.findUnique({
       where: { nimi: body.ryhman_nimi },
       select: { ryhmaid: true },
-    })
-    if (!group) return res.status(404).send('Ryhmää ei löytynyt')
+    });
+    if (!group) return res.status(404).send('Ryhmää ei löytynyt');
 
-    const winner = await prisma.pelaajat.findFirst({
-      where: { nimi: body.voittajan_nimi, ryhmaid: group.ryhmaid },
-      select: { pelaajaid: true },
-    })
-    if (!winner) return res.status(404).send('Voittajaa ei löytynyt ryhmästä')
+    // Handle single string or array of winners for backwards compatibility
+    const winnersList = Array.isArray(body.voittajat)
+      ? body.voittajat
+      : (body.voittajan_nimi ? [body.voittajan_nimi] : []);
 
-    const n = (v) => (v == null || Number.isNaN(Number(v)) ? 0 : Number(v))
+    if (winnersList.length === 0) {
+      return res.status(400).send('Voittajan nimi puuttuu');
+    }
+
+    // Find all winner records matching the group
+    const winners = await prisma.pelaajat.findMany({
+      where: {
+        nimi: { in: winnersList },
+        ryhmaid: group.ryhmaid
+      },
+      select: { pelaajaid: true, nimi: true },
+    });
+
+    if (!winners.length) return res.status(404).send('Voittajia ei löytynyt ryhmästä');
+
+    // Create a Set of winner IDs for fast lookup
+    const winnerIdSet = new Set(winners.map(w => w.pelaajaid));
+    const primaryWinnerId = winners[0].pelaajaid;
+
+    const n = (v) => (v == null || Number.isNaN(Number(v)) ? 0 : Number(v));
 
     const peli = await prisma.$transaction(async (tx) => {
+      // Connect pelit table to the primary winner
       const created = await tx.pelit.create({
         data: {
           pvm: body.pvm ? new Date(body.pvm) : new Date(),
           ryhmat:   { connect: { ryhmaid: group.ryhmaid } },
-          pelaajat: { connect: { pelaajaid: winner.pelaajaid } },
+          pelaajat: { connect: { pelaajaid: primaryWinnerId } },
         },
         select: { peliid: true },
-      })
+      });
 
-      for (let i = 1; i <= 10; i++) {
-        const p = body[`pelaaja${i}`]
-        if (!p || !p.nimi) continue
+      for (let i = 1; i <= 20; i++) { // Increased limit to support larger team rosters
+        const p = body[`pelaaja${i}`];
+        if (!p || !p.nimi) continue;
 
         const dbPlayer = await tx.pelaajat.findFirst({
           where: { nimi: p.nimi, ryhmaid: group.ryhmaid },
           select: { pelaajaid: true },
-        })
-        if (!dbPlayer) continue // or throw if you want strict behavior
+        });
+        if (!dbPlayer) continue;
 
-        const isWinner = dbPlayer.pelaajaid === winner.pelaajaid
+        const isWinner = winnerIdSet.has(dbPlayer.pelaajaid);
+        const POINTS = ['p0','p1','p2','p3','p4','p5','p6','p7','p8','p9','p10','p11','p12'];
 
-        const POINTS = ['p0','p1','p2','p3','p4','p5','p6','p7','p8','p9','p10','p11','p12']
-
-        const initialPoints = Object.fromEntries(POINTS.map(point => [point, n(p[point])]))
+        const initialPoints = Object.fromEntries(POINTS.map(point => [point, n(p[point])]));
         const onCreate = {
-            pelaajaid:  dbPlayer.pelaajaid,
-            pelatutlkm: 1,
-            voitotlkm:  isWinner ? 1 : 0,
-            ...initialPoints,
-        }
+          pelaajaid:  dbPlayer.pelaajaid,
+          pelatutlkm: 1,
+          voitotlkm:  isWinner ? 1 : 0,
+          ...initialPoints,
+        };
 
-        const pointIncs = Object.fromEntries(POINTS.map(point => [point, { increment: n(p[point]) }]))
+        const pointIncs = Object.fromEntries(POINTS.map(point => [point, { increment: n(p[point]) }]));
         const onUpdate = {
           pelatutlkm: { increment: 1 },
           ...(isWinner ? { voitotlkm: { increment: 1 } } : {}),
           ...pointIncs,
-        }
+        };
 
         await tx.statistiikat.upsert({
-          where: { pelaajaid: dbPlayer.pelaajaid }, // unique in your schema
+          where: { pelaajaid: dbPlayer.pelaajaid },
           create: onCreate,
           update: onUpdate
-        })
+        });
       }
 
-      return created
-    })
+      return created;
+    });
 
-    return res.json({ ok: true, peliid: peli.peliid })
+    return res.json({ ok: true, peliid: peli.peliid });
   } catch (err) {
-    console.error('Database error!', err)
-    return res.status(500).send('Database error!')
+    console.error('Database error!', err);
+    return res.status(500).send('Database error!');
   }
-})
+});
 
 const port = process.env.PORT || 3000;
 
